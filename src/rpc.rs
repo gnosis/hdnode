@@ -1,12 +1,80 @@
 //! Module for JSON RPC types.
 
 use crate::serialization;
-use serde::{
-    de::{self, Deserializer, Visitor},
-    Deserialize, Serialize,
-};
+use hyper::{client::HttpConnector, http::uri::Scheme, Uri};
+use hyper_tls::HttpsConnector;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
-use std::fmt::{self, Formatter};
+use std::sync::atomic::AtomicU64;
+
+/// JSON RPC client.
+pub struct Client {
+    inner: Inner,
+    uri: Uri,
+}
+
+impl Client {
+    /// Creates a new client for the given URL.
+    pub fn new(uri: Uri) -> Result<Self, ()> {
+        let inner = match uri.scheme() {
+            Some(s) if *s == Scheme::HTTP => Inner::Http(hyper::Client::new()),
+            Some(s) if *s == Scheme::HTTPS => {
+                let https = HttpsConnector::new();
+                let client = hyper::Client::builder().build::<_, hyper::Body>(https);
+                Inner::Https(client)
+            }
+            _ => {
+                // TODO: error
+                return Err(());
+            }
+        };
+
+        Ok(Self { inner, uri })
+    }
+
+    /// Executes a JSON RPC request.
+    pub async fn execute(&self, request: Request) -> Result<Response, ()> {
+        self.inner.post(&self.uri, request).await
+    }
+
+    /// Executes a JSON RPC request batch.
+    pub async fn execute_many(&self, requests: Vec<Request>) -> Result<Vec<Response>, ()> {
+        self.inner.post(&self.uri, requests).await
+    }
+}
+
+/// A `hyper` HTTP adapter to deal with different schemes.
+enum Inner {
+    Http(hyper::Client<HttpConnector>),
+    Https(hyper::Client<HttpsConnector<HttpConnector>>),
+}
+
+impl Inner {
+    /// Perform HTTP POST for the specified JSON data and parse JSON output.
+    async fn post<T, U>(&self, uri: &Uri, data: T) -> Result<U, ()>
+    where
+        T: Serialize,
+        U: DeserializeOwned,
+    {
+        let request = hyper::Request::post(uri)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&data).map_err(|_| ())?.into())
+            .map_err(|_| ())?;
+
+        let response = match self {
+            Self::Http(client) => client.request(request),
+            Self::Https(client) => client.request(request),
+        }
+        .await
+        .map_err(|_| ())?;
+
+        let (_parts, body) = response.into_parts();
+        let bytes = hyper::body::to_bytes(body).await.map_err(|_| ())?;
+        let result = serde_json::from_slice(&bytes).map_err(|_| ())?;
+
+        Ok(result)
+    }
+}
 
 /// JSON RPC version.
 #[derive(Debug, Deserialize, Serialize)]
@@ -22,75 +90,12 @@ pub enum JsonRpc {
 /// > Number, or NULL value if included. If it is not included it is assumed to
 /// > be a notification. The value SHOULD normally not be Null and Numbers
 /// > SHOULD NOT contain fractional parts
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Id {
     String(String),
     Number(Number),
     Null,
-}
-
-impl<'de> Deserialize<'de> for Id {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct IdVisitor;
-
-        impl<'de> Visitor<'de> for IdVisitor {
-            type Value = Id;
-
-            fn expecting(&self, f: &mut Formatter) -> fmt::Result {
-                f.write_str("a JSON RPC id, either a number, string or null")
-            }
-
-            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Id::Number(v.into()))
-            }
-
-            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Id::Number(v.into()))
-            }
-
-            fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Id::Number(Number::from_f64(v).ok_or_else(|| {
-                    de::Error::invalid_type(de::Unexpected::Float(v), &self)
-                })?))
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                self.visit_string(v.to_owned())
-            }
-
-            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Id::String(v))
-            }
-
-            fn visit_unit<E>(self) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Id::Null)
-            }
-        }
-
-        deserializer.deserialize_any(IdVisitor)
-    }
 }
 
 /// JSON RPC params.
@@ -108,28 +113,28 @@ pub enum Params {
 /// JSON RPC request.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Request {
-    jsonrpc: JsonRpc,
-    method: String,
-    params: Option<Params>,
-    id: Id,
+    pub jsonrpc: JsonRpc,
+    pub method: String,
+    pub params: Option<Params>,
+    pub id: Id,
 }
 
 /// JSON RPC response.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Response {
-    jsonrpc: JsonRpc,
+    pub jsonrpc: JsonRpc,
     #[serde(flatten, with = "serialization::result")]
-    result: Result<Value, Error>,
-    id: Id,
+    pub result: Result<Value, Error>,
+    pub id: Id,
 }
 
 /// JSON RPC error.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Error {
-    code: i64,
-    message: String,
+    pub code: i64,
+    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
+    pub data: Option<Value>,
 }
 
 #[cfg(test)]

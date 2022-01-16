@@ -31,6 +31,23 @@ struct Args {
     node_url: Uri,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     tracing_subscriber::fmt::init();
+
+    let infura_project_id = std::env::var("INFURA_PROJECT_ID").unwrap();
+    let node_url = format!("https://mainnet.infura.io/v3/{infura_project_id}")
+        .parse::<Uri>()
+        .unwrap();
+
+    let rpc = rpc::Client::new(node_url).unwrap();
+    let _ = dbg!(
+        rpc.execute(rpc::Request {
+            jsonrpc: rpc::JsonRpc::V2,
+            method: "eth_chainId".to_owned(),
+            params: Some(rpc::Params::Array(Vec::new())),
+            id: rpc::Id::Number(1.into()),
+        })
+        .await
+    );
 }
