@@ -1,5 +1,5 @@
 mod node;
-mod rpc;
+mod jsonrpc;
 mod serialization;
 
 use clap::Parser;
@@ -40,13 +40,13 @@ async fn main() {
         .parse::<Uri>()
         .unwrap();
 
-    let rpc = rpc::Client::new(node_url).unwrap();
+    let rpc = jsonrpc::Client::new(node_url).unwrap();
     let _ = dbg!(
-        rpc.execute(rpc::Request {
-            jsonrpc: rpc::JsonRpc::V2,
+        rpc.execute(jsonrpc::Request {
+            jsonrpc: jsonrpc::JsonRpc::V2,
             method: "eth_chainId".to_owned(),
-            params: Some(rpc::Params::Array(Vec::new())),
-            id: rpc::Id::Number(1.into()),
+            params: Some(jsonrpc::Params::Array(Vec::new())),
+            id: jsonrpc::Id::Number(1.into()),
         })
         .await
     );
