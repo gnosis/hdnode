@@ -272,7 +272,7 @@ dependencies = [
 [[package]]
 name = "hdwallet"
 version = "0.1.0"
-source = "git+https://github.com/nlordell/hdwallet?tag=v0.1.0#0ee6350d3e0b23495b561eecb82e5770a8d1f595"
+source = "git+https://github.com/nlordell/hdwallet?branch=main#78f65c6f8a046acb1e8f1abafb1ca19bed887608"
 dependencies = [
  "anyhow",
  "clap",

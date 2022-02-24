@@ -255,7 +255,7 @@ pub struct Error {
 
 impl Error {
     /// Creates an error indicating parameters were invalid.
-    pub fn invalid_params() -> Error {
+    pub fn invalid_params() -> Self {
         Self {
             code: -32602,
             message: "Invalid params".to_owned(),
@@ -264,12 +264,16 @@ impl Error {
     }
 
     /// Creates an error indicating an internal server error was encountered.
-    pub fn internal_error() -> Error {
+    pub fn internal_error() -> Self {
         Self {
             code: -32603,
             message: "Internal error".to_owned(),
             data: None,
         }
+    }
+
+    pub fn todo<T>(_: T) -> Self {
+        Self::internal_error()
     }
 }
 

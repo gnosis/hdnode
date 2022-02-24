@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "3", features = ["derive", "env"] }
-hdwallet = { git = "https://github.com/nlordell/hdwallet", tag = "v0.1.0" }
+hdwallet = { git = "https://github.com/nlordell/hdwallet", branch = "main" }
 hex = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"

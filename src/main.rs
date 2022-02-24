@@ -1,6 +1,7 @@
 mod node;
 mod jsonrpc;
 mod serialization;
+mod wallet;
 
 use clap::Parser;
 use hdwallet::mnemonic::Mnemonic;
