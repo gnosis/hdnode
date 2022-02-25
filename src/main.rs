@@ -1,12 +1,14 @@
-mod node;
 mod jsonrpc;
+mod node;
 mod serialization;
 mod wallet;
 
+use self::{node::Node, wallet::Wallet};
 use clap::Parser;
-use hdwallet::mnemonic::Mnemonic;
-use hyper::Uri;
-use std::net::SocketAddr;
+use hdwallet::mnemonic::{Language, Mnemonic};
+use reqwest::Url;
+
+const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -23,32 +25,32 @@ struct Args {
     #[clap(long, env, default_value_t = 100)]
     account_count: usize,
 
-    /// The listening address for the HD node.
-    #[clap(long, env, default_value_t = SocketAddr::from(([127, 0, 0, 1], 8545)))]
-    listen_address: SocketAddr,
-
-    /// The node being proxied.
+    /// The remote node being proxied.
     #[clap(long, env)]
-    node_url: Uri,
+    remote_node_url: Url,
 }
 
-#[tokio::main]
+#[rocket::main]
 async fn main() {
+    let args = Args::parse();
     tracing_subscriber::fmt::init();
 
-    let infura_project_id = std::env::var("INFURA_PROJECT_ID").unwrap();
-    let node_url = format!("https://mainnet.infura.io/v3/{infura_project_id}")
-        .parse::<Uri>()
-        .unwrap();
+    let mnemonic = args.mnemonic.unwrap_or_else(|| {
+        let mnemonic = Mnemonic::random(Language::English, 12).unwrap();
+        tracing::info!(%mnemonic, "using random mnemonic");
+        mnemonic
+    });
+    let wallet = Wallet::new(&mnemonic, &args.password, args.account_count).unwrap();
+    tracing::debug!(accounts = ?wallet.accounts(), "derived accounts");
 
-    let rpc = jsonrpc::Client::new(node_url).unwrap();
-    let _ = dbg!(
-        rpc.execute(jsonrpc::Request {
-            jsonrpc: jsonrpc::JsonRpc::V2,
-            method: "eth_chainId".to_owned(),
-            params: Some(jsonrpc::Params::Array(Vec::new())),
-            id: jsonrpc::Id::Number(1.into()),
-        })
-        .await
-    );
+    let remote = jsonrpc::Client::new(args.remote_node_url).unwrap();
+    tracing::debug!(url = ?remote.url(), "connected to remote node");
+
+    let figment = rocket::Config::figment().merge(("port", 8545));
+    rocket::custom(figment)
+        .manage(Node::new(wallet, remote))
+        .mount(
+            "/",
+            rocket::routes![node::request, node::batch, node::error],
+        );
 }

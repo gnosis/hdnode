@@ -1,12 +1,17 @@
 //! Module for JSON RPC types.
 
-use hyper::{client::HttpConnector, http::uri::Scheme, Uri};
-use hyper_tls::HttpsConnector;
-use serde::{
+use crate::VERSION;
+use anyhow::{bail, ensure, Context as _, Result};
+use reqwest::Url;
+use rocket::serde::{
     de::{self, DeserializeOwned},
+    json::{
+        self,
+        serde_json::{Map, Number},
+        Value,
+    },
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use serde_json::{Map, Number, Value};
 use std::{
     borrow::Cow,
     fmt::{self, Display, Formatter},
@@ -14,128 +19,82 @@ use std::{
 
 /// JSON RPC client.
 pub struct Client {
-    inner: Inner,
-    uri: Uri,
+    client: reqwest::Client,
+    url: Url,
 }
 
 impl Client {
     /// Creates a new client for the given URL.
-    pub fn new(uri: Uri) -> Result<Self, InvalidScheme> {
-        let inner = match uri.scheme() {
-            Some(s) if *s == Scheme::HTTP => Inner::Http(hyper::Client::new()),
-            Some(s) if *s == Scheme::HTTPS => {
-                let https = HttpsConnector::new();
-                let client = hyper::Client::builder().build::<_, hyper::Body>(https);
-                Inner::Https(client)
-            }
-            other => return Err(InvalidScheme(other.cloned())),
-        };
+    pub fn new(url: Url) -> Result<Self> {
+        let client = reqwest::Client::builder().user_agent(VERSION).build()?;
+        Ok(Self { client, url })
+    }
 
-        Ok(Self { inner, uri })
+    /// Returns the URL of the current RPC client.
+    pub fn url(&self) -> &Url {
+        &self.url
     }
 
     /// Executes a JSON RPC request.
-    pub async fn execute(&self, request: Request) -> Result<Response, ClientError> {
-        self.inner.post(&self.uri, request).await
+    pub async fn execute(&self, request: &Request) -> Result<Response> {
+        self.post(request).await
     }
 
     /// Executes a JSON RPC request batch.
-    pub async fn execute_many(&self, requests: Vec<Request>) -> Result<Vec<Response>, ClientError> {
-        self.inner.post(&self.uri, requests).await
+    pub async fn execute_many(&self, requests: &[Request]) -> Result<Vec<Response>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let responses = self.post::<_, Vec<Response>>(requests).await?;
+
+        if requests.len() != responses.len()
+            || requests
+                .iter()
+                .zip(responses.iter())
+                .all(|(request, response)| request.id == response.id)
+        {
+            tracing::error!(
+                ?requests,
+                ?responses,
+                "mismatched batched requests and responses",
+            );
+            bail!("mismatched batched requests and responses");
+        }
+
+        Ok(responses)
     }
-}
 
-/// A `hyper` HTTP adapter to deal with different schemes.
-enum Inner {
-    Http(hyper::Client<HttpConnector>),
-    Https(hyper::Client<HttpsConnector<HttpConnector>>),
-}
-
-impl Inner {
     /// Perform HTTP POST for the specified JSON data and parse JSON output.
-    async fn post<T, U>(&self, uri: &Uri, data: T) -> Result<U, ClientError>
+    async fn post<T, U>(&self, data: T) -> Result<U>
     where
         T: Serialize,
         U: DeserializeOwned,
     {
-        let request = hyper::Request::post(uri)
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&data)?.into())?;
+        let response = self
+            .client
+            .post(self.url.clone())
+            .json(&data)
+            .send()
+            .await
+            .context("failed to send request")?;
 
-        let response = match self {
-            Self::Http(client) => client.request(request),
-            Self::Https(client) => client.request(request),
-        }
-        .await?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .context("failed to read response body")?;
 
-        let (_parts, body) = response.into_parts();
-        let bytes = hyper::body::to_bytes(body).await?;
-        let result = serde_json::from_slice(&bytes)?;
-
-        Ok(result)
-    }
-}
-
-/// Invalid URI scheme.
-#[derive(Debug)]
-pub struct InvalidScheme(pub Option<Scheme>);
-
-impl Display for InvalidScheme {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self.0 {
-            Some(s) => write!(f, "invalid scheme {s}"),
-            None => f.write_str("missing scheme"),
-        }
-    }
-}
-
-impl std::error::Error for InvalidScheme {}
-
-/// JSON RPC client error.
-#[derive(Debug)]
-pub enum ClientError {
-    /// An error occured while preparing and HTTP request.
-    Request(hyper::http::Error),
-
-    /// An error occured while performing an HTTP request.
-    Http(hyper::Error),
-
-    /// An error occured serializing or deserializing JSON RPC data.
-    Json(serde_json::Error),
-}
-
-impl Display for ClientError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Self::Request(err) => write!(f, "HTTP request error: {err}"),
-            Self::Http(err) => write!(f, "HTTP error: {err}"),
-            Self::Json(err) => write!(f, "JSON error: {err}"),
-        }
-    }
-}
-
-impl std::error::Error for ClientError {}
-
-impl From<hyper::http::Error> for ClientError {
-    fn from(err: hyper::http::Error) -> Self {
-        Self::Request(err)
-    }
-}
-
-impl From<hyper::Error> for ClientError {
-    fn from(err: hyper::Error) -> Self {
-        Self::Http(err)
-    }
-}
-
-impl From<serde_json::Error> for ClientError {
-    fn from(err: serde_json::Error) -> Self {
-        Self::Json(err)
+        ensure!(status.is_success(), "HTTP {status} error: {text}");
+        json::from_str(&text)
+            .with_context(|| format!("response body: {text}"))
+            .context("failed to parse response as JSON")
     }
 }
 
 /// JSON RPC version.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
 pub enum JsonRpc {
     #[serde(rename = "2.0")]
     V2,
@@ -148,8 +107,8 @@ pub enum JsonRpc {
 /// > Number, or NULL value if included. If it is not included it is assumed to
 /// > be a notification. The value SHOULD normally not be Null and Numbers
 /// > SHOULD NOT contain fractional parts
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(crate = "rocket::serde", untagged)]
 pub enum Id {
     String(String),
     Number(Number),
@@ -161,8 +120,8 @@ pub enum Id {
 /// From the specification:
 /// > If present, parameters for the rpc call MUST be provided as a structured
 /// > value. Either by-position through an Array or by-name through an Object.
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(crate = "rocket::serde", untagged)]
 pub enum Params {
     Array(Vec<Value>),
     Object(Map<String, Value>),
@@ -179,6 +138,7 @@ impl From<Params> for Value {
 
 /// JSON RPC request.
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
 pub struct Request {
     pub jsonrpc: JsonRpc,
     pub method: String,
@@ -196,6 +156,7 @@ pub struct Response {
 
 /// Helper type for generating serialization implemtation for `Response`.
 #[derive(Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
 struct Res<'a> {
     jsonrpc: JsonRpc,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -246,6 +207,7 @@ impl<'de> Deserialize<'de> for Response {
 
 /// JSON RPC error.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
 pub struct Error {
     pub code: i64,
     pub message: String,
@@ -254,6 +216,24 @@ pub struct Error {
 }
 
 impl Error {
+    /// Creates an error indicating the provided JSON was not a valid request.
+    pub fn parse_error() -> Self {
+        Self {
+            code: -32700,
+            message: "Parse error".to_owned(),
+            data: None,
+        }
+    }
+
+    /// Creates an error indicating the provided JSON was not a valid request.
+    pub fn invalid_request() -> Self {
+        Self {
+            code: -32600,
+            message: "Invalid Request".to_owned(),
+            data: None,
+        }
+    }
+
     /// Creates an error indicating parameters were invalid.
     pub fn invalid_params() -> Self {
         Self {
@@ -271,10 +251,6 @@ impl Error {
             data: None,
         }
     }
-
-    pub fn todo<T>(_: T) -> Self {
-        Self::internal_error()
-    }
 }
 
 impl Display for Error {
@@ -288,7 +264,7 @@ impl std::error::Error for Error {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use rocket::serde::json::serde_json::{self, json};
 
     #[test]
     fn jsonrpc_version() {

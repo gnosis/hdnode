@@ -1,5 +1,6 @@
 //! The wallet used for performing HD node operations.
 
+use anyhow::{Context as _, Result};
 use hdwallet::{
     account::{Address, PrivateKey, Signature},
     hdk,
@@ -9,6 +10,7 @@ use hdwallet::{
     typeddata::TypedData,
 };
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// A collection of accounts that can perform Ethereum ECDSA operations.
 pub struct Wallet {
@@ -19,22 +21,17 @@ pub struct Wallet {
 impl Wallet {
     /// Creates a new wallet from a mnemonic, generating private keys for the
     /// specified number of accounts.
-    pub fn new(
-        mnemonic: &Mnemonic,
-        password: &str,
-        count: usize,
-    ) -> Result<Self, KeyDerivationError> {
+    pub fn new(mnemonic: &Mnemonic, password: &str, count: usize) -> Result<Self> {
         let seed = mnemonic.seed(password);
         let private_keys = (0..count)
             .map(|i| hdk::derive_index(&seed, i))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| KeyDerivationError)?;
+            .context("key derivation error")?;
 
         let addresses = private_keys.iter().map(|key| key.address()).collect();
         let accounts = private_keys
             .into_iter()
-            .enumerate()
-            .map(|(index, account)| (account.address().0, account))
+            .map(|account| (account.address().0, account))
             .collect();
 
         Ok(Self {
@@ -49,7 +46,11 @@ impl Wallet {
     }
 
     /// Signs an Ethereum message.
-    pub fn sign_message(&self, account: Address, message: &[u8]) -> Result<Signature, WalletError> {
+    pub fn sign_message(
+        &self,
+        account: Address,
+        message: &[u8],
+    ) -> Result<Signature, UnknownSignerError> {
         let message = EthereumMessage(message);
         self.sign(account, message.signing_message())
     }
@@ -59,7 +60,7 @@ impl Wallet {
         &self,
         account: Address,
         transaction: &Transaction,
-    ) -> Result<Signature, WalletError> {
+    ) -> Result<Signature, UnknownSignerError> {
         self.sign(account, transaction.signing_message())
     }
 
@@ -68,28 +69,25 @@ impl Wallet {
         &self,
         account: Address,
         typed_data: &TypedData,
-    ) -> Result<Signature, WalletError> {
+    ) -> Result<Signature, UnknownSignerError> {
         self.sign(account, typed_data.signing_message())
     }
 
     /// Signs a raw message with the specified account.
-    fn sign(&self, account: Address, signing_message: [u8; 32]) -> Result<Signature, WalletError> {
+    fn sign(
+        &self,
+        account: Address,
+        signing_message: [u8; 32],
+    ) -> Result<Signature, UnknownSignerError> {
         let private_key = self
             .accounts
             .get(&account.0)
-            .ok_or(WalletError::AccountNotFound)?;
+            .ok_or(UnknownSignerError(account))?;
         Ok(private_key.sign(signing_message))
     }
 }
 
-/// An error occured during key derivation.
-pub struct KeyDerivationError;
-
-/// An error occured for a signing operations.
-pub enum WalletError {
-    /// The specified account is not part of the wallet.
-    AccountNotFound,
-
-    /// A validation error occured.
-    Invalid(Option<String>),
-}
+/// An error indicating that the signer is unknown.
+#[derive(Debug, Error)]
+#[error("unknown signer {0}")]
+pub struct UnknownSignerError(pub Address);
