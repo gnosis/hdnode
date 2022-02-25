@@ -181,9 +181,7 @@ impl Node {
                 ))
             }),
             "eth_signTransaction" => Handled::internal(params, |(account, transaction)| {
-                Ok(Bytes::from_signature(
-                    self.wallet.sign_transaction(account, &transaction)?,
-                ))
+                Ok(Bytes(self.wallet.sign_transaction(account, &transaction)?))
             }),
             "eth_signTypedData" => Handled::internal(params, |(account, typed_data)| {
                 Ok(Bytes::from_signature(

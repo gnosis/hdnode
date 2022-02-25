@@ -60,8 +60,9 @@ impl Wallet {
         &self,
         account: Address,
         transaction: &Transaction,
-    ) -> Result<Signature, UnknownSignerError> {
-        self.sign(account, transaction.signing_message())
+    ) -> Result<Vec<u8>, UnknownSignerError> {
+        let signature = self.sign(account, transaction.signing_message())?;
+        Ok(transaction.encode(signature))
     }
 
     /// Signs an Ethereum message.

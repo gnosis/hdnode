@@ -52,5 +52,8 @@ async fn main() {
         .mount(
             "/",
             rocket::routes![node::request, node::batch, node::error],
-        );
+        )
+        .launch()
+        .await
+        .unwrap();
 }
