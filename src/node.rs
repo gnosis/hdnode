@@ -3,7 +3,7 @@
 use crate::{
     jsonrpc::{self, Id, JsonRpc, Params, Request, Response},
     serialization::{Addresses, Bytes},
-    wallet::{UnknownSignerError, Wallet},
+    signer::{wallet::UnknownSignerError, BoxSigner},
 };
 use anyhow::Result;
 use rocket::{
@@ -48,14 +48,14 @@ pub fn error(data: String) -> Json<Response> {
 
 /// HD Node.
 pub struct Node {
-    wallet: Wallet,
+    signer: BoxSigner,
     remote: jsonrpc::Client,
 }
 
 impl Node {
     /// Creates a new HD node instance.
-    pub fn new(wallet: Wallet, remote: jsonrpc::Client) -> Self {
-        Self { wallet, remote }
+    pub fn new(signer: BoxSigner, remote: jsonrpc::Client) -> Self {
+        Self { signer, remote }
     }
 
     /// Handles an RPC request.
@@ -164,7 +164,7 @@ impl Node {
     /// Handler method for a particular request method and parameters.
     fn mux_handler(&self, method: &str, params: Option<Params>) -> Result<Handled, jsonrpc::Error> {
         match &*method {
-            "eth_accounts" => Handled::internal(params, |()| Ok(Addresses(self.wallet.accounts()))),
+            "eth_accounts" => Handled::internal(params, |()| Ok(Addresses(self.signer.accounts()))),
             "eth_sendTransaction" => {
                 let signed_transaction = self
                     .mux_handler("eth_signTransaction", params)?
@@ -177,15 +177,16 @@ impl Node {
             }
             "eth_sign" => Handled::internal(params, |(account, Bytes::<Vec<_>>(data))| {
                 Ok(Bytes::from_signature(
-                    self.wallet.sign_message(account, &data)?,
+                    self.signer.sign_message(account, &data)?,
                 ))
             }),
             "eth_signTransaction" => Handled::internal(params, |(account, transaction)| {
-                Ok(Bytes(self.wallet.sign_transaction(account, &transaction)?))
+                let signature = self.signer.sign_transaction(account, &transaction)?;
+                Ok(Bytes(transaction.encode(signature)))
             }),
             "eth_signTypedData" => Handled::internal(params, |(account, typed_data)| {
                 Ok(Bytes::from_signature(
-                    self.wallet.sign_typed_data(account, &typed_data)?,
+                    self.signer.sign_typed_data(account, &typed_data)?,
                 ))
             }),
 
@@ -249,9 +250,13 @@ impl Handled {
     }
 }
 
-impl From<UnknownSignerError> for jsonrpc::Error {
-    fn from(err: UnknownSignerError) -> Self {
+impl From<anyhow::Error> for jsonrpc::Error {
+    fn from(err: anyhow::Error) -> Self {
         tracing::debug!(%err, "encountered error");
-        jsonrpc::Error::invalid_params()
+        if err.downcast_ref::<UnknownSignerError>().is_some() {
+            jsonrpc::Error::invalid_params()
+        } else {
+            jsonrpc::Error::internal_error()
+        }
     }
 }

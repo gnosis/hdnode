@@ -1,9 +1,12 @@
 mod jsonrpc;
 mod node;
 mod serialization;
-mod wallet;
+mod signer;
 
-use self::{node::Node, wallet::Wallet};
+use crate::{
+    node::Node,
+    signer::{log_recorder::LogRecorder, wallet::Wallet, Signing as _},
+};
 use clap::Parser;
 use hdwallet::mnemonic::{Language, Mnemonic};
 use reqwest::Url;
@@ -41,14 +44,15 @@ async fn main() {
         mnemonic
     });
     let wallet = Wallet::new(&mnemonic, &args.password, args.account_count).unwrap();
-    tracing::debug!(accounts = ?wallet.accounts(), "derived accounts");
+    let signer = Box::new(LogRecorder(wallet));
+    tracing::debug!(accounts = ?signer.accounts(), "derived accounts");
 
     let remote = jsonrpc::Client::new(args.remote_node_url).unwrap();
     tracing::debug!(url = ?remote.url(), "connected to remote node");
 
     let figment = rocket::Config::figment().merge(("port", 8545));
     rocket::custom(figment)
-        .manage(Node::new(wallet, remote))
+        .manage(Node::new(signer, remote))
         .mount(
             "/",
             rocket::routes![node::request, node::batch, node::error],

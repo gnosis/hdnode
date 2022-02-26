@@ -1,8 +1,17 @@
 //! Module containing serialization helpers.
 
 use hdwallet::account::{Address, Signature};
-use rocket::serde::{de, Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
-use std::borrow::Cow;
+use rocket::serde::{
+    de,
+    json::{self, Value},
+    ser::SerializeSeq,
+    Deserialize, DeserializeOwned, Deserializer, Serialize, Serializer,
+};
+use std::{
+    borrow::Cow,
+    fmt::{self, Debug, Formatter},
+    ops::Deref,
+};
 
 /// Hex-encoded bytes serializer.
 pub struct Bytes<T>(pub T);
@@ -79,5 +88,40 @@ impl Serialize for Addresses<'_> {
             seq.serialize_element(&address.to_string())?;
         }
         seq.end()
+    }
+}
+
+/// A wrapper type around `Deserialize` implementations that keeps the original
+/// JSON object for debug printing.
+pub struct Raw<T> {
+    raw: Value,
+    inner: T,
+}
+
+impl<T> Deref for Raw<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T> Debug for Raw<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.raw)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Raw<T>
+where
+    T: DeserializeOwned,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        let inner = json::from_value(raw.clone()).map_err(de::Error::custom)?;
+        Ok(Self { raw, inner })
     }
 }

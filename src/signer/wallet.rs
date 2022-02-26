@@ -1,13 +1,12 @@
 //! The wallet used for performing HD node operations.
 
+use super::{Signing, Transaction, TypedData};
 use anyhow::{Context as _, Result};
 use hdwallet::{
     account::{Address, PrivateKey, Signature},
     hdk,
     message::EthereumMessage,
     mnemonic::Mnemonic,
-    transaction::Transaction,
-    typeddata::TypedData,
 };
 use std::collections::HashMap;
 use thiserror::Error;
@@ -40,51 +39,32 @@ impl Wallet {
         })
     }
 
-    /// Returns the list of addresses kept in the node wallet.
-    pub fn accounts(&self) -> &[Address] {
-        &self.addresses
-    }
-
-    /// Signs an Ethereum message.
-    pub fn sign_message(
-        &self,
-        account: Address,
-        message: &[u8],
-    ) -> Result<Signature, UnknownSignerError> {
-        let message = EthereumMessage(message);
-        self.sign(account, message.signing_message())
-    }
-
-    /// Signs an Ethereum message.
-    pub fn sign_transaction(
-        &self,
-        account: Address,
-        transaction: &Transaction,
-    ) -> Result<Vec<u8>, UnknownSignerError> {
-        let signature = self.sign(account, transaction.signing_message())?;
-        Ok(transaction.encode(signature))
-    }
-
-    /// Signs an Ethereum message.
-    pub fn sign_typed_data(
-        &self,
-        account: Address,
-        typed_data: &TypedData,
-    ) -> Result<Signature, UnknownSignerError> {
-        self.sign(account, typed_data.signing_message())
-    }
-
     /// Signs a raw message with the specified account.
-    fn sign(
-        &self,
-        account: Address,
-        signing_message: [u8; 32],
-    ) -> Result<Signature, UnknownSignerError> {
+    fn sign(&self, account: Address, signing_message: [u8; 32]) -> Result<Signature> {
         let private_key = self
             .accounts
             .get(&account.0)
             .ok_or(UnknownSignerError(account))?;
         Ok(private_key.sign(signing_message))
+    }
+}
+
+impl Signing for Wallet {
+    fn accounts(&self) -> &[Address] {
+        &self.addresses
+    }
+
+    fn sign_message(&self, account: Address, message: &[u8]) -> Result<Signature> {
+        let message = EthereumMessage(message);
+        self.sign(account, message.signing_message())
+    }
+
+    fn sign_transaction(&self, account: Address, transaction: &Transaction) -> Result<Signature> {
+        self.sign(account, transaction.signing_message())
+    }
+
+    fn sign_typed_data(&self, account: Address, typed_data: &TypedData) -> Result<Signature> {
+        self.sign(account, typed_data.signing_message())
     }
 }
 
