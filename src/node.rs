@@ -1,5 +1,10 @@
 //! Module implemeting the HD node handler.
 
+mod eth;
+pub mod transaction;
+pub mod typeddata;
+
+use self::transaction::TransactionRequest;
 use crate::{
     jsonrpc::{self, Id, JsonRpc, Params, Request, Response},
     serialization::{Addresses, Bytes, NoParameters},
@@ -7,12 +12,14 @@ use crate::{
 };
 use anyhow::Result;
 use rocket::{
+    futures::future,
     serde::{
         json::{self, Json, Value},
         Deserialize, DeserializeOwned, Serialize,
     },
     State,
 };
+use std::future::Future;
 
 /// Helper type with different handler input types.
 ///
@@ -65,7 +72,7 @@ impl Node {
 
     /// Handles an RPC request.
     pub async fn handle_request(&self, request: Request) -> Response {
-        match self.mux(request) {
+        match self.mux(request).await {
             Outcome::Internal(response) => response,
             Outcome::Remote(request) => match self.remote.execute(&request).await {
                 Ok(response) => response,
@@ -84,13 +91,15 @@ impl Node {
     /// Handles an RPC batch.
     pub async fn handle_requests(&self, requests: Vec<Request>) -> Vec<Response> {
         let request_count = requests.len();
-        let (responses, remote_requests) = requests.into_iter().fold(
+        let outcomes =
+            future::join_all(requests.into_iter().map(|request| self.mux(request))).await;
+        let (responses, remote_requests) = outcomes.into_iter().fold(
             (
                 Vec::with_capacity(request_count),
                 Vec::with_capacity(request_count),
             ),
-            |(mut responses, mut remote), request| {
-                match self.mux(request) {
+            |(mut responses, mut remote), outcome| {
+                match outcome {
                     Outcome::Internal(response) => responses.push(Some(response)),
                     Outcome::Remote(request) => {
                         responses.push(None);
@@ -142,8 +151,11 @@ impl Node {
     ///
     /// This allows requests to either be completely proxied to the remote node
     /// or partially handled internally.
-    fn mux(&self, request: Request) -> Outcome {
-        match self.mux_handler(&request.method, request.params.clone()) {
+    async fn mux(&self, request: Request) -> Outcome {
+        match self
+            .mux_handler(&request.method, request.params.clone())
+            .await
+        {
             Ok(Handled::Internal(value)) => Outcome::Internal(Response {
                 jsonrpc: request.jsonrpc,
                 result: Ok(value),
@@ -167,35 +179,54 @@ impl Node {
     }
 
     /// Handler method for a particular request method and parameters.
-    fn mux_handler(&self, method: &str, params: Option<Params>) -> Result<Handled, jsonrpc::Error> {
-        match &*method {
-            "eth_accounts" => Handled::internal(params, |_: NoParameters| {
-                Ok(Addresses(self.signer.accounts()))
-            }),
-            "eth_sendTransaction" => {
-                let signed_transaction = self
-                    .mux_handler("eth_signTransaction", params)?
-                    .into_internal()
-                    .expect("`eth_signTransaction` was not handled internally");
-                Ok(Handled::Remote(
-                    "eth_sendRawTransaction".to_owned(),
-                    Some(Params::Array(vec![signed_transaction])),
-                ))
+    async fn mux_handler(
+        &self,
+        method: &str,
+        params: Option<Params>,
+    ) -> Result<Handled, jsonrpc::Error> {
+        match method {
+            "eth_accounts" => {
+                Handled::internal(params, |_: NoParameters| async {
+                    Ok(Addresses(self.signer.accounts()))
+                })
+                .await
             }
-            "eth_sign" => Handled::internal(params, |(account, Bytes::<Vec<_>>(data))| {
-                Ok(Bytes::from_signature(
-                    self.signer.sign_message(account, &data)?,
-                ))
-            }),
-            "eth_signTransaction" => Handled::internal(params, |(account, transaction)| {
-                let signature = self.signer.sign_transaction(account, &transaction)?;
-                Ok(Bytes(transaction.encode(signature)))
-            }),
-            "eth_signTypedData" => Handled::internal(params, |(account, typed_data)| {
-                Ok(Bytes::from_signature(
-                    self.signer.sign_typed_data(account, &typed_data)?,
-                ))
-            }),
+            "eth_sendTransaction" | "eth_signTransaction" => {
+                let signed_transaction =
+                    Handled::internal(params, |(transaction,): (TransactionRequest,)| async {
+                        let (account, transaction) = transaction.fill().await?;
+                        let signature = self.signer.sign_transaction(account, &transaction)?;
+                        Ok(Bytes(transaction.encode(signature)))
+                    })
+                    .await?;
+
+                if method == "eth_sendTransaction" {
+                    Ok(Handled::Remote(
+                        "eth_sendRawTransaction".to_owned(),
+                        Some(Params::Array(vec![signed_transaction
+                            .into_internal()
+                            .unwrap()])),
+                    ))
+                } else {
+                    Ok(signed_transaction)
+                }
+            }
+            "eth_sign" => {
+                Handled::internal(params, |(account, data): (_, Bytes<Vec<_>>)| async move {
+                    Ok(Bytes::from_signature(
+                        self.signer.sign_message(account, &data)?,
+                    ))
+                })
+                .await
+            }
+            "eth_signTypedData" => {
+                Handled::internal(params, |(account, typed_data)| async move {
+                    Ok(Bytes::from_signature(
+                        self.signer.sign_typed_data(account, &typed_data)?,
+                    ))
+                })
+                .await
+            }
 
             _ => Ok(Handled::Remote(method.to_owned(), params)),
         }
@@ -226,11 +257,12 @@ enum Handled {
 
 impl Handled {
     /// Creates a response to an internally handled request.
-    fn internal<T, U, F>(params: Option<Params>, f: F) -> Result<Self, jsonrpc::Error>
+    async fn internal<T, U, F, Fut>(params: Option<Params>, f: F) -> Result<Self, jsonrpc::Error>
     where
         T: DeserializeOwned,
         U: Serialize,
-        F: FnOnce(T) -> Result<U, jsonrpc::Error>,
+        F: FnOnce(T) -> Fut,
+        Fut: Future<Output = Result<U, jsonrpc::Error>>,
     {
         let params = params.map(Value::from).unwrap_or(Value::Null);
         let params = T::deserialize(params).map_err(|err| {
@@ -238,7 +270,7 @@ impl Handled {
             jsonrpc::Error::invalid_params()
         })?;
 
-        let value = f(params)?;
+        let value = f(params).await?;
         let value = json::serde_json::to_value(&value).map_err(|err| {
             tracing::error!(?err, "unexpected error serializing response JSON");
             jsonrpc::Error::internal_error()

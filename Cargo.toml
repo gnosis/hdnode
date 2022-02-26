@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+ethnum = "1"
 hdwallet = { git = "https://github.com/nlordell/hdwallet", tag = "v0.1.1" }
 hex = "0.4"
 reqwest = { version = "0.11", features = ["json"] }

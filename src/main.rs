@@ -5,7 +5,7 @@ mod signer;
 
 use crate::{
     node::Node,
-    serialization::Addresses,
+    serialization::{Addresses, Str},
     signer::{log_recorder::LogRecorder, wallet::Wallet, Signing as _},
 };
 use anyhow::Result;
@@ -19,8 +19,7 @@ const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSI
 #[serde(crate = "rocket::serde")]
 struct Config {
     /// The BIP-0039 mnemonic phrase for seeding the HD wallet accounts.
-    #[serde(with = "serialization::str")]
-    mnemonic: Mnemonic,
+    mnemonic: Str<Mnemonic>,
 
     /// The password to use with the mnemonic phrase for salting the seed used
     /// for the HD wallet.
@@ -31,8 +30,7 @@ struct Config {
     account_count: usize,
 
     /// The remote node being proxied.
-    #[serde(with = "serialization::str")]
-    remote_node_url: Url,
+    remote_node_url: Str<Url>,
 }
 
 #[rocket::main]
@@ -57,7 +55,7 @@ async fn main() {
 }
 
 fn init(config: &Config) -> Result<Node> {
-    let wallet = Wallet::new(&config.mnemonic, &config.password, config.account_count)?;
+    let wallet = Wallet::new(&*config.mnemonic, &config.password, config.account_count)?;
     let signer = Box::new(LogRecorder(wallet));
     tracing::debug!(accounts = ?Addresses(signer.accounts()), "derived accounts");
 

@@ -1,22 +1,20 @@
 //! Module containing serialization helpers.
 
+use ethnum::U256;
 use hdwallet::account::{Address, Signature};
-use rocket::serde::{
-    de,
-    json::{self, Value},
-    ser::SerializeSeq,
-    Deserialize, DeserializeOwned, Deserializer, Serialize, Serializer,
-};
+use rocket::serde::{de, ser::SerializeSeq as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     borrow::Cow,
-    fmt::{self, Debug, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     ops::Deref,
+    str::FromStr,
 };
 
 /// Type repesenting empty JSON RPC parameters.
 pub type NoParameters = [(); 0];
 
 /// Hex-encoded bytes serializer.
+#[derive(Default)]
 pub struct Bytes<T>(pub T);
 
 impl Bytes<[u8; 65]> {
@@ -27,6 +25,26 @@ impl Bytes<[u8; 65]> {
         buffer[32..64].copy_from_slice(&signature.s);
         buffer[64] = signature.v();
         Bytes(buffer)
+    }
+}
+
+impl<T> Debug for Bytes<T>
+where
+    Bytes<T>: Serialize,
+{
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.serialize(f)
+    }
+}
+
+impl<T> Deref for Bytes<T>
+where
+    T: AsRef<[u8]>,
+{
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
     }
 }
 
@@ -109,55 +127,83 @@ impl Serialize for Addresses<'_> {
     }
 }
 
-/// A wrapper type around `Deserialize` implementations that keeps the original
-/// JSON object for debug printing.
-pub struct Raw<T> {
-    raw: Value,
-    inner: T,
-}
+/// Module implementing serialization for types that implement standard string
+/// conversion methods.
+pub struct Str<T>(pub T);
 
-impl<T> Deref for Raw<T> {
+impl<T> Deref for Str<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.0
     }
 }
 
-impl<T> Debug for Raw<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.raw)
-    }
-}
-
-impl<'de, T> Deserialize<'de> for Raw<T>
+impl<T> Debug for Str<T>
 where
-    T: DeserializeOwned,
+    T: Debug,
+{
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+impl<T> Serialize for Str<T>
+where
+    T: Display,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: Display,
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}", self.0))
+    }
+}
+impl<'de, T> Deserialize<'de> for Str<T>
+where
+    T: FromStr,
+    T::Err: Display,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let raw = Value::deserialize(deserializer)?;
-        let inner = json::from_value(raw.clone()).map_err(de::Error::custom)?;
-        Ok(Self { raw, inner })
+        let s = Cow::<str>::deserialize(deserializer)?;
+        T::from_str(&*s).map(Str).map_err(de::Error::custom)
     }
 }
 
-/// Module implementing serialization for types that implement standard string
-/// conversion methods.
-pub mod str {
-    use rocket::serde::{de, Deserialize as _, Deserializer};
-    use std::{borrow::Cow, fmt::Display, str::FromStr};
+/// Wrapper type implementing serialization for 25b-bit unsigned intengers.
+#[derive(Default, Eq, PartialEq)]
+pub struct Quantity(pub U256);
 
-    #[doc(hidden)]
-    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+impl Debug for Quantity {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+impl Serialize for Quantity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        T: FromStr,
-        T::Err: Display,
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{:#x}", self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Quantity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
         D: Deserializer<'de>,
     {
         let s = Cow::<str>::deserialize(deserializer)?;
-        T::from_str(&*s).map_err(de::Error::custom)
+        let s = s
+            .strip_prefix("0x")
+            .ok_or_else(|| de::Error::custom("missing '0x' prefix"))?;
+        U256::from_str_radix(s, 16)
+            .map(Quantity)
+            .map_err(de::Error::custom)
     }
 }

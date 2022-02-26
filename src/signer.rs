@@ -8,7 +8,7 @@ pub mod log_recorder;
 pub mod nonce_validator;
 pub mod wallet;
 
-use crate::serialization::Raw;
+use crate::node::{transaction::Transaction, typeddata::TypedData};
 use anyhow::Result;
 use hdwallet::account::{Address, Signature};
 
@@ -29,11 +29,3 @@ pub trait Signing {
 
 /// A boxed signer that is safe to send between threads.
 pub type BoxSigner = Box<dyn Signing + Send + Sync + 'static>;
-
-/// Wrapper type around `hdwallet::transaction::Transaction` with a `Debug`
-/// implementation printing original raw JSON.
-pub type Transaction = Raw<hdwallet::transaction::Transaction>;
-
-/// Wrapper type around `hdwallet::typeddata::TypedData` with a `Debug`
-/// implementation printing original raw JSON.
-pub type TypedData = Raw<hdwallet::typeddata::TypedData>;

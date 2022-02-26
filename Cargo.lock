@@ -498,6 +498,7 @@ name = "hdnode"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "ethnum",
  "hdwallet",
  "hex",
  "reqwest",

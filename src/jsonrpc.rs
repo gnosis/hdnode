@@ -37,7 +37,14 @@ impl Client {
 
     /// Executes a JSON RPC request.
     pub async fn execute(&self, request: &Request) -> Result<Response> {
-        self.post(request).await
+        let response = self.post::<_, Response>(request).await?;
+
+        if request.id != response.id {
+            tracing::error!(?request, ?response, "mismatched request and response");
+            bail!("mismatched request and response");
+        }
+
+        Ok(response)
     }
 
     /// Executes a JSON RPC request batch.
