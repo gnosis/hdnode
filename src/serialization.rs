@@ -13,6 +13,9 @@ use std::{
     ops::Deref,
 };
 
+/// Type repesenting empty JSON RPC parameters.
+pub type NoParameters = [(); 0];
+
 /// Hex-encoded bytes serializer.
 pub struct Bytes<T>(pub T);
 
@@ -75,8 +78,23 @@ impl<'de, const N: usize> Deserialize<'de> for Bytes<[u8; N]> {
     }
 }
 
-/// Serialization implementation for a slice of addresses.
+/// Serialization and debug implementation for a slice of addresses.
 pub struct Addresses<'a>(pub &'a [Address]);
+
+impl Debug for Addresses<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        struct DisplayAsDebug<'b>(&'b Address);
+        impl Debug for DisplayAsDebug<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        f.debug_list()
+            .entries(self.0.iter().map(DisplayAsDebug))
+            .finish()
+    }
+}
 
 impl Serialize for Addresses<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -123,5 +141,23 @@ where
         let raw = Value::deserialize(deserializer)?;
         let inner = json::from_value(raw.clone()).map_err(de::Error::custom)?;
         Ok(Self { raw, inner })
+    }
+}
+
+/// Module implementing serialization for types that implement standard string
+/// conversion methods.
+pub mod str {
+    use rocket::serde::{de, Deserialize as _, Deserializer};
+    use std::{borrow::Cow, fmt::Display, str::FromStr};
+
+    #[doc(hidden)]
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+    where
+        T: FromStr,
+        T::Err: Display,
+        D: Deserializer<'de>,
+    {
+        let s = Cow::<str>::deserialize(deserializer)?;
+        T::from_str(&*s).map_err(de::Error::custom)
     }
 }

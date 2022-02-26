@@ -93,7 +93,7 @@ impl Client {
 }
 
 /// JSON RPC version.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(crate = "rocket::serde")]
 pub enum JsonRpc {
     #[serde(rename = "2.0")]
@@ -107,7 +107,7 @@ pub enum JsonRpc {
 /// > Number, or NULL value if included. If it is not included it is assumed to
 /// > be a notification. The value SHOULD normally not be Null and Numbers
 /// > SHOULD NOT contain fractional parts
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(crate = "rocket::serde", untagged)]
 pub enum Id {
     String(String),
@@ -120,7 +120,7 @@ pub enum Id {
 /// From the specification:
 /// > If present, parameters for the rpc call MUST be provided as a structured
 /// > value. Either by-position through an Array or by-name through an Object.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(crate = "rocket::serde", untagged)]
 pub enum Params {
     Array(Vec<Value>),
@@ -137,7 +137,7 @@ impl From<Params> for Value {
 }
 
 /// JSON RPC request.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(crate = "rocket::serde")]
 pub struct Request {
     pub jsonrpc: JsonRpc,
@@ -216,15 +216,6 @@ pub struct Error {
 }
 
 impl Error {
-    /// Creates an error indicating the provided JSON was not a valid request.
-    pub fn parse_error() -> Self {
-        Self {
-            code: -32700,
-            message: "Parse error".to_owned(),
-            data: None,
-        }
-    }
-
     /// Creates an error indicating the provided JSON was not a valid request.
     pub fn invalid_request() -> Self {
         Self {
@@ -314,6 +305,19 @@ mod tests {
                 "params": (1, "2"),
                 "id": 42,
             }),
+        );
+
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"jsonrpc":"2.0","id":0,"method":"eth_accounts","params":[]}"#
+            )
+            .unwrap(),
+            Request {
+                jsonrpc: JsonRpc::V2,
+                method: "eth_accounts".to_string(),
+                params: Some(Params::Array(vec![])),
+                id: Id::Number(0.into()),
+            }
         );
     }
 

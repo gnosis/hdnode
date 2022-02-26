@@ -1,0 +1,5 @@
+[default]
+port = 9545
+mnemonic = "myth like bonus scare over problem client lizard pioneer submit female collect"
+account_count = 5
+remote_node_url = "http://localhost:8545"

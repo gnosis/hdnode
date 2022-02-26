@@ -2,48 +2,53 @@
 
 use crate::{
     jsonrpc::{self, Id, JsonRpc, Params, Request, Response},
-    serialization::{Addresses, Bytes},
+    serialization::{Addresses, Bytes, NoParameters},
     signer::{wallet::UnknownSignerError, BoxSigner},
 };
 use anyhow::Result;
 use rocket::{
     serde::{
         json::{self, Json, Value},
-        DeserializeOwned, Serialize,
+        Deserialize, DeserializeOwned, Serialize,
     },
     State,
 };
 
-#[rocket::post("/", format = "json", data = "<request>")]
-pub async fn request(request: Json<Request>, node: &State<Node>) -> Json<Response> {
-    Json(node.handle_request(request.into_inner()).await)
+/// Helper type with different handler input types.
+///
+/// This is needed to work around the fact that Rocket shortcuts the forwarding
+/// process if it fails to deserialize its input.
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde", untagged)]
+pub enum Input {
+    Request(Request),
+    Batch(Vec<Request>),
+    Unrecognized(Value),
 }
 
-#[rocket::post("/", format = "json", data = "<requests>", rank = 2)]
-pub async fn batch(requests: Json<Vec<Request>>, node: &State<Node>) -> Json<Vec<Response>> {
-    Json(node.handle_requests(requests.into_inner()).await)
+/// Helper type with different handler output types.
+#[derive(Serialize)]
+#[serde(crate = "rocket::serde", untagged)]
+pub enum Output {
+    Response(Response),
+    Batch(Vec<Response>),
 }
 
-#[rocket::post("/", data = "<data>", rank = 3)]
-pub fn error(data: String) -> Json<Response> {
-    // We get here if we are unable to parse the HTTP body as either a JSON-RPC
-    // request or batch of requests. According to the spec, we need to either
-    // error as a parse error (in case the JSON is invalid) or an invalid
-    // request error (in case the JSON is valid, but not a valid Request).
-
-    let err = if json::from_str::<Value>(&data).is_err() {
-        tracing::debug!(%data, "HTTP body does not contain valid JSON");
-        jsonrpc::Error::parse_error()
-    } else {
-        tracing::debug!(%data, "HTTP body is not a valid request or batch");
-        jsonrpc::Error::invalid_request()
+#[rocket::post("/", format = "json", data = "<input>")]
+pub async fn handler(input: Json<Input>, node: &State<Node>) -> Json<Output> {
+    let output = match input.into_inner() {
+        Input::Request(request) => Output::Response(node.handle_request(request).await),
+        Input::Batch(requests) => Output::Batch(node.handle_requests(requests).await),
+        Input::Unrecognized(data) => {
+            tracing::debug!(%data, "HTTP body is not a valid request or batch");
+            Output::Response(Response {
+                jsonrpc: JsonRpc::V2,
+                result: Err(jsonrpc::Error::invalid_request()),
+                id: Id::Null,
+            })
+        }
     };
-
-    Json(Response {
-        jsonrpc: JsonRpc::V2,
-        result: Err(err),
-        id: Id::Null,
-    })
+    Json(output)
 }
 
 /// HD Node.
@@ -164,7 +169,9 @@ impl Node {
     /// Handler method for a particular request method and parameters.
     fn mux_handler(&self, method: &str, params: Option<Params>) -> Result<Handled, jsonrpc::Error> {
         match &*method {
-            "eth_accounts" => Handled::internal(params, |()| Ok(Addresses(self.signer.accounts()))),
+            "eth_accounts" => Handled::internal(params, |_: NoParameters| {
+                Ok(Addresses(self.signer.accounts()))
+            }),
             "eth_sendTransaction" => {
                 let signed_transaction = self
                     .mux_handler("eth_signTransaction", params)?

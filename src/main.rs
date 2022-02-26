@@ -5,59 +5,64 @@ mod signer;
 
 use crate::{
     node::Node,
+    serialization::Addresses,
     signer::{log_recorder::LogRecorder, wallet::Wallet, Signing as _},
 };
-use clap::Parser;
-use hdwallet::mnemonic::{Language, Mnemonic};
+use anyhow::Result;
+use hdwallet::mnemonic::Mnemonic;
 use reqwest::Url;
+use rocket::{fairing::AdHoc, serde::Deserialize};
 
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
-#[derive(Debug, Parser)]
-struct Args {
+#[derive(Debug, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct Config {
     /// The BIP-0039 mnemonic phrase for seeding the HD wallet accounts.
-    #[clap(short, long, env, hide_env_values = true)]
-    mnemonic: Option<Mnemonic>,
+    #[serde(with = "serialization::str")]
+    mnemonic: Mnemonic,
 
     /// The password to use with the mnemonic phrase for salting the seed used
     /// for the HD wallet.
-    #[clap(long, env, hide_env_values = true, default_value_t)]
+    #[serde(default)]
     password: String,
 
     /// The number of accounts to derive from the mnemonic seed phrase.
-    #[clap(long, env, default_value_t = 100)]
     account_count: usize,
 
     /// The remote node being proxied.
-    #[clap(long, env)]
+    #[serde(with = "serialization::str")]
     remote_node_url: Url,
 }
 
 #[rocket::main]
 async fn main() {
-    let args = Args::parse();
     tracing_subscriber::fmt::init();
 
-    let mnemonic = args.mnemonic.unwrap_or_else(|| {
-        let mnemonic = Mnemonic::random(Language::English, 12).unwrap();
-        tracing::info!(%mnemonic, "using random mnemonic");
-        mnemonic
-    });
-    let wallet = Wallet::new(&mnemonic, &args.password, args.account_count).unwrap();
-    let signer = Box::new(LogRecorder(wallet));
-    tracing::debug!(accounts = ?signer.accounts(), "derived accounts");
-
-    let remote = jsonrpc::Client::new(args.remote_node_url).unwrap();
-    tracing::debug!(url = ?remote.url(), "connected to remote node");
-
-    let figment = rocket::Config::figment().merge(("port", 8545));
-    rocket::custom(figment)
-        .manage(Node::new(signer, remote))
-        .mount(
-            "/",
-            rocket::routes![node::request, node::batch, node::error],
-        )
+    rocket::build()
+        .attach(AdHoc::config::<Config>())
+        .attach(AdHoc::try_on_ignite("hdnode::Node", |rocket| async {
+            match init(rocket.state().unwrap()) {
+                Ok(node) => Ok(rocket.manage(node)),
+                Err(err) => {
+                    tracing::error!(?err, "failed to inialize node");
+                    Err(rocket)
+                }
+            }
+        }))
+        .mount("/", rocket::routes![node::handler])
         .launch()
         .await
         .unwrap();
+}
+
+fn init(config: &Config) -> Result<Node> {
+    let wallet = Wallet::new(&config.mnemonic, &config.password, config.account_count)?;
+    let signer = Box::new(LogRecorder(wallet));
+    tracing::debug!(accounts = ?Addresses(signer.accounts()), "derived accounts");
+
+    let remote = jsonrpc::Client::new(config.remote_node_url.clone()).unwrap();
+    tracing::debug!(url = %remote.url(), "connected to remote node");
+
+    Ok(Node::new(signer, remote))
 }

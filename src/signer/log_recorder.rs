@@ -17,8 +17,8 @@ where
 
     fn sign_message(&self, account: Address, message: &[u8]) -> Result<Signature> {
         let signature = self.0.sign_message(account, message)?;
-        let message = format!("0x{}", hex::encode(message));
-        tracing::info!(%account, %message, %signature, "signed message");
+        let ethmessage = format!("0x{}", hex::encode(message));
+        tracing::info!(%account, %ethmessage, %signature, "signed message");
         Ok(signature)
     }
 
