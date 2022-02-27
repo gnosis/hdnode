@@ -4,7 +4,7 @@ mod serialization;
 mod signer;
 
 use crate::{
-    node::Node,
+    node::{eth::Eth, Node},
     serialization::{Addresses, Str},
     signer::{log_recorder::LogRecorder, wallet::Wallet, Signing as _},
 };
@@ -40,7 +40,7 @@ async fn main() {
     rocket::build()
         .attach(AdHoc::config::<Config>())
         .attach(AdHoc::try_on_ignite("hdnode::Node", |rocket| async {
-            match init(rocket.state().unwrap()) {
+            match init(rocket.state().unwrap()).await {
                 Ok(node) => Ok(rocket.manage(node)),
                 Err(err) => {
                     tracing::error!(?err, "failed to inialize node");
@@ -54,13 +54,17 @@ async fn main() {
         .unwrap();
 }
 
-fn init(config: &Config) -> Result<Node> {
+async fn init(config: &Config) -> Result<Node> {
     let wallet = Wallet::new(&*config.mnemonic, &config.password, config.account_count)?;
     let signer = Box::new(LogRecorder(wallet));
     tracing::debug!(accounts = ?Addresses(signer.accounts()), "derived accounts");
 
-    let remote = jsonrpc::Client::new(config.remote_node_url.clone()).unwrap();
-    tracing::debug!(url = %remote.url(), "connected to remote node");
+    let remote = Eth::from_url(config.remote_node_url.0.clone()).unwrap();
+    let chain = match remote.chain_id().await {
+        Ok(chain_id) => chain_id.to_string(),
+        err => format!("{:?}", err),
+    };
+    tracing::debug!(url = %remote.url(), %chain, "connected to remote node");
 
     Ok(Node::new(signer, remote))
 }

@@ -1,10 +1,11 @@
 //! Module implemeting the HD node handler.
 
-mod eth;
+pub mod eth;
 pub mod transaction;
 pub mod typeddata;
+pub mod types;
 
-use self::transaction::TransactionRequest;
+use self::{eth::Eth, transaction::TransactionRequest};
 use crate::{
     jsonrpc::{self, Id, JsonRpc, Params, Request, Response},
     serialization::{Addresses, Bytes, NoParameters},
@@ -61,12 +62,12 @@ pub async fn handler(input: Json<Input>, node: &State<Node>) -> Json<Output> {
 /// HD Node.
 pub struct Node {
     signer: BoxSigner,
-    remote: jsonrpc::Client,
+    remote: Eth,
 }
 
 impl Node {
     /// Creates a new HD node instance.
-    pub fn new(signer: BoxSigner, remote: jsonrpc::Client) -> Self {
+    pub fn new(signer: BoxSigner, remote: Eth) -> Self {
         Self { signer, remote }
     }
 
@@ -194,7 +195,7 @@ impl Node {
             "eth_sendTransaction" | "eth_signTransaction" => {
                 let signed_transaction =
                     Handled::internal(params, |(transaction,): (TransactionRequest,)| async {
-                        let (account, transaction) = transaction.fill().await?;
+                        let (account, transaction) = transaction.fill(&self.remote).await?;
                         let signature = self.signer.sign_transaction(account, &transaction)?;
                         Ok(Bytes(transaction.encode(signature)))
                     })

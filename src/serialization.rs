@@ -14,7 +14,7 @@ use std::{
 pub type NoParameters = [(); 0];
 
 /// Hex-encoded bytes serializer.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Bytes<T>(pub T);
 
 impl Bytes<[u8; 65]> {
@@ -129,6 +129,7 @@ impl Serialize for Addresses<'_> {
 
 /// Module implementing serialization for types that implement standard string
 /// conversion methods.
+#[derive(Clone, Copy)]
 pub struct Str<T>(pub T);
 
 impl<T> Deref for Str<T> {
@@ -175,7 +176,7 @@ where
 }
 
 /// Wrapper type implementing serialization for 25b-bit unsigned intengers.
-#[derive(Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub struct Quantity(pub U256);
 
 impl Debug for Quantity {
