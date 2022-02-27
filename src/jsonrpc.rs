@@ -7,7 +7,7 @@ use rocket::serde::{
     de::{self, DeserializeOwned},
     json::{
         self,
-        serde_json::{Map, Number},
+        serde_json::{self, Map, Number},
         Value,
     },
     Deserialize, Deserializer, Serialize, Serializer,
@@ -59,7 +59,7 @@ impl Client {
             || requests
                 .iter()
                 .zip(responses.iter())
-                .all(|(request, response)| request.id == response.id)
+                .any(|(request, response)| request.id != response.id)
         {
             tracing::error!(
                 ?requests,
@@ -78,6 +78,8 @@ impl Client {
         T: Serialize,
         U: DeserializeOwned,
     {
+        tracing::trace!(data = %serde_json::to_string(&data)?, "request");
+
         let response = self
             .client
             .post(self.url.clone())
@@ -92,10 +94,10 @@ impl Client {
             .await
             .context("failed to read response body")?;
 
-        ensure!(status.is_success(), "HTTP {status} error: {text}");
-        json::from_str(&text)
-            .with_context(|| format!("response body: {text}"))
-            .context("failed to parse response as JSON")
+        tracing::trace!(%status, data = %text, "response");
+
+        ensure!(status.is_success(), "HTTP {status} error");
+        json::from_str(&text).context("failed to parse response as JSON")
     }
 }
 

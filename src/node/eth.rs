@@ -13,7 +13,6 @@ use ethnum::U256;
 use hdwallet::account::Address;
 use reqwest::Url;
 use rocket::{
-    futures::{future::BoxFuture, FutureExt},
     serde::{
         json::{self, serde_json, Value},
         DeserializeOwned, Serialize,
@@ -23,10 +22,7 @@ use rocket::{
 use std::{
     future::Future,
     ops::Deref,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 static ID: AtomicU64 = AtomicU64::new(1);
@@ -50,16 +46,12 @@ fn prepare(method: &'static str, params: impl Serialize) -> Result<Request> {
 /// An Ethereum RPC client.
 pub struct Eth {
     client: jsonrpc::Client,
-    chain_id_cache: Arc<ChainIdCache>,
 }
 
 impl Eth {
     /// Creates a new Ethereum RPC client.
     pub fn new(client: jsonrpc::Client) -> Self {
-        Self {
-            client,
-            chain_id_cache: Default::default(),
-        }
+        Self { client }
     }
 
     /// Creates a new Ethereum RPC client from a URL.
@@ -71,7 +63,6 @@ impl Eth {
     pub fn batch(&self) -> Batch<'_> {
         Batch {
             client: &self.client,
-            chain_id_cache: self.chain_id_cache.clone(),
             queue: Vec::new(),
         }
     }
@@ -90,10 +81,10 @@ impl Eth {
 
     /// Retrieves the chain ID.
     pub async fn chain_id(&self) -> Result<U256> {
-        self.chain_id_cache
-            .clone()
-            .with(|| self.call("eth_chainId", NoParameters::default()))
-            .await
+        Ok(self
+            .call::<_, Quantity>("eth_chainId", NoParameters::default())
+            .await?
+            .0)
     }
 }
 
@@ -105,49 +96,9 @@ impl Deref for Eth {
     }
 }
 
-/// Shared cached Ethereum RPC values.
-#[derive(Default)]
-struct ChainIdCache(Mutex<Option<U256>>);
-
-impl ChainIdCache {
-    fn with<'fut, F, Fut>(self: Arc<Self>, f: F) -> BoxFuture<'fut, Result<U256>>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Quantity>> + Send + Sync + 'fut,
-    {
-        // Check the cache first, otherwise fetch and store. Note that we may
-        // race and fetch the chain ID multiple times on startup. Since this
-        // should happen only once, its not worth the extra code complexity for
-        // doing proper synchronization.
-
-        let chain_id = match *self.0.lock().unwrap() {
-            Some(chain_id) => Ok(chain_id),
-            None => Err(f()),
-        };
-
-        async move {
-            match chain_id {
-                Ok(chain_id) => Ok(chain_id),
-                Err(future) => {
-                    let chain_id = future.await?.0;
-                    *self.0.lock().unwrap() = Some(chain_id);
-                    Ok(chain_id)
-                }
-            }
-        }
-        // Unfortunately we need to box the future here and can't just return
-        // `impl Future`. This is because returning an `impl Trait`, it is
-        // bounded by all input type parameters even if it is explicitely not
-        // marked as such:
-        // <https://github.com/rust-lang/rust/issues/42940>
-        .boxed()
-    }
-}
-
 /// A batched Ethereum RPC client.
 pub struct Batch<'a> {
     client: &'a jsonrpc::Client,
-    chain_id_cache: Arc<ChainIdCache>,
     queue: Vec<(Request, oneshot::Sender<Response>)>,
 }
 
@@ -186,9 +137,8 @@ impl<'a> Batch<'a> {
 
     /// Retrieves the chain ID.
     pub fn chain_id(&mut self) -> impl Future<Output = Result<U256>> {
-        self.chain_id_cache
-            .clone()
-            .with(|| self.call("eth_chainId", NoParameters::default()))
+        let response = self.call::<_, Quantity>("eth_chainId", NoParameters::default());
+        async move { Ok(response.await?.0) }
     }
 
     /// Retrieves an accounts transaction count (i.e. their next nonce).

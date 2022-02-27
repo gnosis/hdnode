@@ -110,7 +110,7 @@ impl TransactionRequest {
         let nonce = nonce.await?;
         ensure!(
             self.nonce.get_or_insert(Quantity(nonce)).0 == nonce,
-            "only signing transactions for current nonce permitted",
+            "only signing transactions for current nonce ({nonce:#x}) permitted",
         );
 
         if let Some(gas) = gas {

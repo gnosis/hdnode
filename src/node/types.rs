@@ -5,7 +5,7 @@ use rocket::serde::{Deserialize, Serialize};
 
 /// A block reference.
 #[derive(Deserialize, Serialize)]
-#[serde(crate = "rocket::serde", untagged)]
+#[serde(crate = "rocket::serde")]
 pub enum Block {
     /// The latest block.
     #[serde(rename = "latest")]
@@ -13,8 +13,6 @@ pub enum Block {
     /// The pending block.
     #[serde(rename = "pending")]
     Pending,
-    /// The specified block number.
-    Number(Quantity),
 }
 
 /// Fee history.

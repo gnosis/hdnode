@@ -292,8 +292,10 @@ impl Handled {
 
 impl From<anyhow::Error> for jsonrpc::Error {
     fn from(err: anyhow::Error) -> Self {
-        tracing::debug!(%err, "encountered error");
-        if err.downcast_ref::<UnknownSignerError>().is_some() {
+        tracing::debug!(?err, "encountered error");
+        if let Some(err) = err.downcast_ref::<jsonrpc::Error>() {
+            err.clone()
+        } else if err.downcast_ref::<UnknownSignerError>().is_some() {
             jsonrpc::Error::invalid_params()
         } else {
             jsonrpc::Error::internal_error()
