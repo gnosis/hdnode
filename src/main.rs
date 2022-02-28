@@ -3,10 +3,12 @@ mod node;
 mod serialization;
 mod signer;
 
+use std::path::PathBuf;
+
 use crate::{
     node::{eth::Eth, Node},
     serialization::{Addresses, Str},
-    signer::{log_recorder::LogRecorder, wallet::Wallet, Signing as _},
+    signer::{log_recorder::LogRecorder, validator::Validator, wallet::Wallet, BoxSigner},
 };
 use anyhow::Result;
 use hdwallet::mnemonic::Mnemonic;
@@ -31,6 +33,9 @@ struct Config {
 
     /// The remote node being proxied.
     remote_node_url: Str<Url>,
+
+    /// A Lua module to use as a validator.
+    validator: Option<PathBuf>,
 }
 
 #[rocket::main]
@@ -55,16 +60,21 @@ async fn main() {
 }
 
 async fn init(config: &Config) -> Result<Node> {
-    let wallet = Wallet::new(&*config.mnemonic, &config.password, config.account_count)?;
-    let signer = Box::new(LogRecorder(wallet));
-    tracing::debug!(accounts = ?Addresses(signer.accounts()), "derived accounts");
-
     let remote = Eth::from_url(config.remote_node_url.0.clone()).unwrap();
     let chain = match remote.chain_id().await {
         Ok(chain_id) => chain_id.to_string(),
         err => format!("{:?}", err),
     };
     tracing::debug!(url = %remote.url(), %chain, "connected to remote node");
+
+    let wallet = Wallet::new(&*config.mnemonic, &config.password, config.account_count)?;
+    let recorder = LogRecorder(wallet);
+    let signer: BoxSigner = if let Some(validator) = &config.validator {
+        Box::new(Validator::new(recorder, validator).unwrap())
+    } else {
+        Box::new(recorder)
+    };
+    tracing::debug!(accounts = ?Addresses(signer.accounts()), "derived accounts");
 
     Ok(Node::new(signer, remote))
 }

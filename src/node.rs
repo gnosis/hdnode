@@ -5,7 +5,7 @@ pub mod transaction;
 pub mod typeddata;
 pub mod types;
 
-use self::{eth::Eth, transaction::TransactionRequest};
+use self::{eth::Eth, transaction::TransactionRequest, typeddata::TypedData};
 use crate::{
     jsonrpc::{self, Id, JsonRpc, Params, Request, Response},
     serialization::{Addresses, Bytes, NoParameters},
@@ -221,7 +221,8 @@ impl Node {
                 .await
             }
             "eth_signTypedData" => {
-                Handled::internal(params, |(account, typed_data)| async move {
+                Handled::internal(params, |(account, typed_data): (_, TypedData)| async move {
+                    typed_data.verify(&self.remote).await?;
                     Ok(Bytes::from_signature(
                         self.signer.sign_typed_data(account, &typed_data)?,
                     ))

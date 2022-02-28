@@ -48,12 +48,21 @@ where
     }
 }
 
+impl Serialize for Bytes<&'_ [u8]> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("0x{}", hex::encode(self.0)))
+    }
+}
+
 impl Serialize for Bytes<Vec<u8>> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+        Bytes(&self.0[..]).serialize(serializer)
     }
 }
 
@@ -62,7 +71,7 @@ impl<const N: usize> Serialize for Bytes<[u8; N]> {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+        Bytes(&self.0[..]).serialize(serializer)
     }
 }
 

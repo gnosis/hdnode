@@ -6,6 +6,7 @@
 
 pub mod log_recorder;
 pub mod nonce_validator;
+pub mod validator;
 pub mod wallet;
 
 use crate::node::{transaction::Transaction, typeddata::TypedData};
