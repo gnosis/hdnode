@@ -18,4 +18,11 @@ The service provides some very basic validation on the signed data:
 Additionally, the service has a concept of a "validator" - a Lua module that
 gets called on every signature operation to validate whether or not the
 signature should be allowed. It can perform arbitrary logic. For an example,
-take a look at [the CowSwap sample validator](`validators/cowswap.lua`).
+take a look at [the CowSwap sample validator](validators/cowswap.lua).
+
+## TODO
+
+- [ ] CI
+- [ ] Increase test coverage - its pretty poor ATM
+- [ ] Optionally record signatures to a database instead of just logging them
+- [ ] General project cleanup - it was done quite quickly

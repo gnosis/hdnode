@@ -170,6 +170,7 @@ where
         serializer.serialize_str(&format!("{}", self.0))
     }
 }
+
 impl<'de, T> Deserialize<'de> for Str<T>
 where
     T: FromStr,

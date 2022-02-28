@@ -5,7 +5,6 @@
 //! database.
 
 pub mod log_recorder;
-pub mod nonce_validator;
 pub mod validator;
 pub mod wallet;
 
